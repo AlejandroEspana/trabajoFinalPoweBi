@@ -1,0 +1,140 @@
+x-awslogs: &awslogs-base
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION:-us-east-2}
+    awslogs-group: /academico-bi/produccion
+    awslogs-create-group: "true"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: academico_postgres
+    restart: unless-stopped
+    logging:
+      <<: *awslogs-base
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /academico-bi/produccion
+        awslogs-create-group: "true"
+        awslogs-stream: postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-momento3_powerbi}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    ports:
+      - "${POSTGRES_EXPOSE_PORT:-5432}:5432"
+    volumes:
+      - pgdata_academico:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-momento3_powerbi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  etl:
+    build:
+      context: .
+      dockerfile: etl/Dockerfile
+    container_name: academico_etl
+    profiles: ["etl"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-momento3_powerbi}
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-123456}
+      SPARK_DRIVER_MEMORY: 512m
+    volumes:
+      - ./sources/etl_rendimiento.py:/workspace/etl_rendimiento.py:ro
+      - ./sources/xAPI-Edu-Data.csv:/workspace/xAPI-Edu-Data.csv:ro
+      - ./sources/02_vistas.sql:/workspace/02_vistas.sql:ro
+      - ./sources/03_realtime_trigger.sql:/workspace/03_realtime_trigger.sql:ro
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: academico_backend
+    restart: unless-stopped
+    logging:
+      <<: *awslogs-base
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /academico-bi/produccion
+        awslogs-create-group: "true"
+        awslogs-stream: backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGDATABASE: ${POSTGRES_DB:-momento3_powerbi}
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-123456}
+      AWS_REGION: ${AWS_REGION:-us-east-2}
+      CLOUDWATCH_NAMESPACE: EduAnalytics/Academico
+      CORS_ORIGINS: "*"
+    volumes:
+      - ./sources/xAPI-Edu-Data.csv:/workspace/xAPI-Edu-Data.csv:ro
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: academico_frontend
+    restart: unless-stopped
+    logging:
+      <<: *awslogs-base
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /academico-bi/produccion
+        awslogs-create-group: "true"
+        awslogs-stream: frontend
+    depends_on:
+      - backend
+    ports:
+      - "${HTTP_PORT:-80}:80"
+
+  backup:
+    build:
+      context: .
+      dockerfile: backup/Dockerfile
+    container_name: academico_backup
+    profiles: ["backup"]
+    network_mode: host
+    restart: unless-stopped
+    logging:
+      <<: *awslogs-base
+      options:
+        awslogs-region: ${AWS_REGION:-us-east-2}
+        awslogs-group: /academico-bi/produccion
+        awslogs-create-group: "true"
+        awslogs-stream: backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: 127.0.0.1
+      PGPORT: ${POSTGRES_EXPOSE_PORT:-5432}
+      PGDATABASE: ${POSTGRES_DB:-momento3_powerbi}
+      PGUSER: ${POSTGRES_USER:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-123456}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-2}
+      CLOUDWATCH_NAMESPACE: EduAnalytics/Academico
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      S3_BACKUP_BUCKET: ${S3_BACKUP_BUCKET:-}
+      S3_BACKUP_PREFIX: ${S3_BACKUP_PREFIX:-backups/momento3_powerbi}
+      BACKUP_CRON: ${BACKUP_CRON:-0 */6 * * *}
+      RUN_ON_STARTUP: "true"
+
+volumes:
+  pgdata_academico:

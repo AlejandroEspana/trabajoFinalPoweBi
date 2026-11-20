@@ -1,0 +1,28 @@
+# Llaves privadas y secretos (NUNCA subir a Git)
+*.pem
+*.key
+*.ppk
+.env
+.env.*
+!.env.example
+
+# Perfil de Chrome de Selenium (sesiones, cookies y caché pesada)
+selenium_config/chrome_profile/
+
+# Dependencias y compilaciones Frontend
+node_modules/
+**/node_modules/
+aws_platform/frontend/dist/
+
+# Python / entornos virtuales
+venv/
+.venv/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Archivos temporales del sistema
+.DS_Store
+Thumbs.db
+*.log
+*.tsbuildinfo
